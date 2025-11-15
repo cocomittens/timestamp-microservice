@@ -9,8 +9,36 @@ def get_current_timestamp(timezone_name=None):
     tz = timezone.utc if not timezone_name else ZoneInfo(timezone_name)
     return int(datetime.now(tz).timestamp())
 
-def get_timestamp_difference(timestamp_1, timestamp_2):
-    pass
+def _parse_timestamp(value):
+    if isinstance(value, (int, float)):
+        return datetime.fromtimestamp(float(value), timezone.utc)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            raise ValueError("Timestamp cannot be empty")
+        sign = 1
+        if text[0] == "-":
+            sign = -1
+            text_body = text[1:]
+        else:
+            text_body = text
+        if text_body.isdigit():
+            num = int(text_body) * sign
+            if len(text_body) > 10:
+                return datetime.fromtimestamp(num / 1000, timezone.utc)
+            return datetime.fromtimestamp(num, timezone.utc)
+        iso_text = text[:-1] + "+00:00" if text.endswith("Z") else text
+        dt = datetime.fromisoformat(iso_text)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.astimezone(timezone.utc)
+    raise ValueError("Invalid timestamp value")
+
+def get_timestamp_difference(timestamp_1, timestamp_2=None):
+    first = _parse_timestamp(timestamp_1)
+    second = datetime.now(timezone.utc) if timestamp_2 is None else _parse_timestamp(timestamp_2)
+    delta = second - first if second >= first else first - second
+    return int(delta.total_seconds() * 1000)
 
 def main():
     """
@@ -21,11 +49,11 @@ def main():
     context = zmq.Context()
     socket = context.socket(zmq.REP)
 
-    port = 5444
+    port = 5234
     socket.bind(f"tcp://*:{port}")
 
     print("=" * 50)
-    print("Randomizer Microservice")
+    print("Timestamp Microservice")
     print("=" * 50)
     print(f"Status: Running")
     print(f"Port: {port}")
@@ -49,18 +77,30 @@ def main():
                 # parse JSON request
                 request = json.loads(message)
 
-                timezone_name = request.get("timezone")
-                if timezone_name is None or timezone_name == "":
-                    timezone_name = None
-                elif not isinstance(timezone_name, str):
-                    raise ValueError("Timezone must be a string")
+                if "timestamps" in request:
+                    timestamps = request["timestamps"]
+                    if not isinstance(timestamps, list):
+                        raise ValueError("Timestamps must be a list")
+                    if not 1 <= len(timestamps) <= 2:
+                        raise ValueError("Provide one or two timestamps")
+                    difference = get_timestamp_difference(timestamps[0], timestamps[1] if len(timestamps) == 2 else None)
+                    response = {
+                        "valid": True,
+                        "difference_ms": difference
+                    }
+                else:
+                    timezone_name = request.get("timezone")
+                    if timezone_name is None or timezone_name == "":
+                        timezone_name = None
+                    elif not isinstance(timezone_name, str):
+                        raise ValueError("Timezone must be a string")
 
-                timestamp = get_current_timestamp(timezone_name)
-                response = {
-                    "valid": True,
-                    "timestamp": timestamp,
-                    "timezone": timezone_name or "UTC"
-                }
+                    timestamp = get_current_timestamp(timezone_name)
+                    response = {
+                        "valid": True,
+                        "timestamp": timestamp,
+                        "timezone": timezone_name or "UTC"
+                    }
 
                 response_json = json.dumps(response)
                 socket.send_string(response_json)
